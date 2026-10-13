@@ -9,25 +9,67 @@ import { Card, CardContent } from "../../components/ui/card"
 import { Input } from "../../components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select"
 import { Textarea } from "../../components/ui/textarea"
+import { DataGate } from "../../components/data-gate"
 import { useBookingPlatform } from "../../hooks/use-booking-platform"
-import { formatCurrency, formatDateTime, getStatusTone } from "../../lib/booking-helpers"
-import type { AppointmentStatus } from "../../lib/types"
+import { formatCurrency, formatDateTime, formatTime, getStatusTone } from "../../lib/booking-helpers"
+import { ApiClientError } from "../../lib/api-client"
+import { FormError } from "../../components/form-error"
+import { useSubmit } from "../../hooks/use-submit"
+import { SlotPicker } from "../../components/slot-picker"
+import { useSlots } from "../../hooks/use-slots"
+import { zonedDateKey } from "../../lib/booking-engine"
+import { canTransition, isReschedulable } from "../../lib/appointment-rules"
+import { getDisplayTimeZone } from "../../lib/booking-helpers"
+import type { Appointment, AppointmentStatus } from "../../lib/types"
 
 const statusOptions: AppointmentStatus[] = ["scheduled", "confirmed", "completed", "cancelled", "no-show"]
 
 export default function AppointmentsPage() {
-  const { appointments, clients, createAppointment, providers, services, updateAppointmentStatus } = useBookingPlatform()
+  const platform = useBookingPlatform()
+  const { appointments, clients, createAppointment, providers, services, updateAppointment, updateAppointmentStatus } = platform
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
-  const [form, setForm] = useState({
+  const blankForm = () => ({
     clientId: "",
     providerId: "",
     serviceId: "",
-    startTime: "2026-07-25T10:00",
-    channel: "website",
+    date: zonedDateKey(new Date(), getDisplayTimeZone()),
+    startTime: "",
+    channel: "phone",
     location: "Main Studio",
     notes: "",
   })
+  const [form, setForm] = useState(blankForm)
+  const submit = useSubmit()
+  const [rowError, setRowError] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const activeServices = services.filter((service) => service.isActive)
+  const eligibleProviders = providers.filter(
+    (provider) => provider.isActive && (!form.serviceId || provider.specialties.includes(form.serviceId)),
+  )
+  const slotState = useSlots({ providerId: form.providerId, serviceId: form.serviceId, date: form.date })
+
+  const changeForm = (patch: Partial<ReturnType<typeof blankForm>>) =>
+    setForm((current) => {
+      const next = { ...current, ...patch }
+      // Anything that changes what is bookable invalidates the chosen time.
+      if ("providerId" in patch || "serviceId" in patch || "date" in patch) next.startTime = ""
+      // Drop the provider if they don't offer the newly chosen service.
+      if ("serviceId" in patch) {
+        const provider = providers.find((item) => item.id === next.providerId)
+        if (provider && !provider.specialties.includes(next.serviceId)) next.providerId = ""
+      }
+      return next
+    })
+
+  const runRowAction = async (action: () => Promise<unknown>) => {
+    setRowError(null)
+    try {
+      await action()
+    } catch (e) {
+      setRowError(e instanceof Error ? e.message : "Update failed.")
+    }
+  }
 
   const filteredAppointments = appointments
     .filter((appointment) => (statusFilter === "all" ? true : appointment.status === statusFilter))
@@ -42,6 +84,8 @@ export default function AppointmentsPage() {
 
   return (
     <AppShell
+      session={platform.session}
+      onLogout={platform.logout}
       eyebrow="Booking Operations"
       title="Coordinate the live appointment pipeline"
       subtitle="This screen moves beyond basic booking CRUD by tracking booking channels, payment state, service value, staff assignment, and status progression across the appointment lifecycle."
@@ -51,6 +95,7 @@ export default function AppointmentsPage() {
         </Badge>
       }
     >
+      <DataGate platform={platform}>
       <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
         <Card className="rounded-[28px] border-slate-200/80">
           <CardContent className="p-7">
@@ -67,7 +112,7 @@ export default function AppointmentsPage() {
             <div className="mt-6 grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-slate-700">Client</label>
-                <Select value={form.clientId} onValueChange={(value) => setForm((current) => ({ ...current, clientId: value }))}>
+                <Select value={form.clientId} onValueChange={(value) => changeForm({ clientId: value })}>
                   <SelectTrigger className="rounded-2xl">
                     <SelectValue placeholder="Choose client" />
                   </SelectTrigger>
@@ -83,15 +128,12 @@ export default function AppointmentsPage() {
 
               <div className="space-y-2">
                 <label className="text-sm font-medium text-slate-700">Provider</label>
-                <Select
-                  value={form.providerId}
-                  onValueChange={(value) => setForm((current) => ({ ...current, providerId: value }))}
-                >
+                <Select value={form.providerId} onValueChange={(value) => changeForm({ providerId: value })}>
                   <SelectTrigger className="rounded-2xl">
                     <SelectValue placeholder="Assign provider" />
                   </SelectTrigger>
                   <SelectContent>
-                    {providers.map((provider) => (
+                    {eligibleProviders.map((provider) => (
                       <SelectItem key={provider.id} value={provider.id}>
                         {provider.name}
                       </SelectItem>
@@ -102,12 +144,12 @@ export default function AppointmentsPage() {
 
               <div className="space-y-2">
                 <label className="text-sm font-medium text-slate-700">Service</label>
-                <Select value={form.serviceId} onValueChange={(value) => setForm((current) => ({ ...current, serviceId: value }))}>
+                <Select value={form.serviceId} onValueChange={(value) => changeForm({ serviceId: value })}>
                   <SelectTrigger className="rounded-2xl">
                     <SelectValue placeholder="Select service" />
                   </SelectTrigger>
                   <SelectContent>
-                    {services.map((service) => (
+                    {activeServices.map((service) => (
                       <SelectItem key={service.id} value={service.id}>
                         {service.name}
                       </SelectItem>
@@ -117,12 +159,27 @@ export default function AppointmentsPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700">Start time</label>
+                <label className="text-sm font-medium text-slate-700" htmlFor="booking-date">
+                  Date
+                </label>
                 <Input
+                  id="booking-date"
                   className="rounded-2xl"
-                  type="datetime-local"
+                  type="date"
+                  value={form.date}
+                  onChange={(event) => changeForm({ date: event.target.value })}
+                />
+              </div>
+
+              <div className="space-y-2 md:col-span-2">
+                <label className="text-sm font-medium text-slate-700">Available times</label>
+                <SlotPicker
+                  slots={slotState.slots}
+                  loading={slotState.loading}
+                  error={slotState.error}
+                  ready={Boolean(form.providerId && form.serviceId && form.date)}
                   value={form.startTime}
-                  onChange={(event) => setForm((current) => ({ ...current, startTime: event.target.value }))}
+                  onChange={(startTime) => setForm((current) => ({ ...current, startTime }))}
                 />
               </div>
 
@@ -160,35 +217,31 @@ export default function AppointmentsPage() {
               </div>
             </div>
 
+            <FormError error={submit.error} />
             <Button
               className="mt-5"
-              onClick={() => {
-                if (!form.clientId || !form.providerId || !form.serviceId || !form.startTime) {
-                  return
-                }
-
-                createAppointment({
-                  clientId: form.clientId,
-                  providerId: form.providerId,
-                  serviceId: form.serviceId,
-                  startTime: new Date(form.startTime),
-                  channel: form.channel as "website" | "phone" | "walk-in" | "partner",
-                  location: form.location,
-                  notes: form.notes,
+              disabled={submit.pending}
+              onClick={() =>
+                submit.run(async () => {
+                  if (!form.startTime) {
+                    throw new ApiClientError(400, "VALIDATION_ERROR", "Pick an available time.", {
+                      startTime: ["Choose one of the available times"],
+                    })
+                  }
+                  await createAppointment({
+                    clientId: form.clientId,
+                    providerId: form.providerId,
+                    serviceId: form.serviceId,
+                    startTime: new Date(form.startTime),
+                    channel: form.channel as "website" | "phone" | "walk-in" | "partner",
+                    location: form.location,
+                    notes: form.notes,
+                  })
+                  setForm(blankForm())
                 })
-
-                setForm({
-                  clientId: "",
-                  providerId: "",
-                  serviceId: "",
-                  startTime: "2026-07-25T10:00",
-                  channel: "website",
-                  location: "Main Studio",
-                  notes: "",
-                })
-              }}
+              }
             >
-              Create booking
+              {submit.pending ? "Booking..." : "Create booking"}
             </Button>
           </CardContent>
         </Card>
@@ -226,6 +279,12 @@ export default function AppointmentsPage() {
               </div>
             </div>
 
+            {rowError ? (
+              <div role="alert" className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+                {rowError}
+              </div>
+            ) : null}
+
             <div className="mt-6 space-y-4">
               {filteredAppointments.map((appointment) => {
                 const client = clients.find((item) => item.id === appointment.clientId)
@@ -245,7 +304,7 @@ export default function AppointmentsPage() {
                         <p className="mt-2 text-sm text-slate-600">
                           {client?.name} with {provider?.name}
                         </p>
-                        <p className="mt-1 text-sm text-slate-500">{formatDateTime(appointment.startTime)}</p>
+                        <p className="mt-1 text-sm text-slate-500">{formatDateTime(appointment.startTime)} – {formatTime(appointment.endTime)}</p>
                       </div>
 
                       <div className="grid gap-3 text-sm text-slate-600 md:grid-cols-3 lg:text-right">
@@ -267,17 +326,43 @@ export default function AppointmentsPage() {
                     {appointment.notes ? <p className="mt-4 text-sm leading-7 text-slate-600">{appointment.notes}</p> : null}
 
                     <div className="mt-4 flex flex-wrap gap-2">
-                      {statusOptions.map((status) => (
-                        <Button
-                          key={status}
-                          variant={appointment.status === status ? "default" : "outline"}
-                          className="rounded-full"
-                          onClick={() => updateAppointmentStatus(appointment.id, status)}
-                        >
-                          {status}
-                        </Button>
-                      ))}
+                      {statusOptions.map((status) => {
+                        const allowed = canTransition(appointment.status, status)
+                        return (
+                          <Button
+                            key={status}
+                            variant={appointment.status === status ? "default" : "outline"}
+                            className="rounded-full"
+                            disabled={!allowed}
+                            title={allowed ? undefined : `Can't change ${appointment.status} to ${status}`}
+                            onClick={() => {
+                              if (status === appointment.status) return
+                              if (status === "cancelled" && !window.confirm("Cancel this appointment? The time slot will be released.")) return
+                              void runRowAction(() => updateAppointmentStatus(appointment.id, status))
+                            }}
+                          >
+                            {status}
+                          </Button>
+                        )
+                      })}
+                      <Button
+                        variant="ghost"
+                        className="rounded-full"
+                        onClick={() => setEditingId(editingId === appointment.id ? null : appointment.id)}
+                      >
+                        {editingId === appointment.id ? "Close" : "Edit / reschedule"}
+                      </Button>
                     </div>
+
+                    {editingId === appointment.id ? (
+                      <EditPanel
+                        appointment={appointment}
+                        onSave={async (patch) => {
+                          await updateAppointment(appointment.id, patch)
+                          setEditingId(null)
+                        }}
+                      />
+                    ) : null}
                   </div>
                 )
               })}
@@ -292,6 +377,76 @@ export default function AppointmentsPage() {
           </CardContent>
         </Card>
       </div>
+      </DataGate>
     </AppShell>
+  )
+}
+
+function EditPanel({
+  appointment,
+  onSave,
+}: {
+  appointment: Appointment
+  onSave: (patch: { startTime?: Date; notes: string; location: string }) => Promise<void>
+}) {
+  const submit = useSubmit()
+  const tz = getDisplayTimeZone()
+  const [date, setDate] = useState(zonedDateKey(appointment.startTime, tz))
+  const [startTime, setStartTime] = useState("")
+  const [notes, setNotes] = useState(appointment.notes)
+  const [location, setLocation] = useState(appointment.location)
+  const canReschedule = isReschedulable(appointment.status)
+  const slotState = useSlots({
+    providerId: canReschedule ? appointment.providerId : undefined,
+    serviceId: appointment.serviceId,
+    date,
+    excludeAppointmentId: appointment.id,
+  })
+
+  return (
+    <div className="mt-4 space-y-4 rounded-[20px] border border-[#eadfcf] bg-white/70 p-4">
+      {canReschedule ? (
+        <>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-700" htmlFor={`date-${appointment.id}`}>
+              New date
+            </label>
+            <Input
+              id={`date-${appointment.id}`}
+              className="max-w-xs rounded-2xl"
+              type="date"
+              value={date}
+              onChange={(event) => {
+                setDate(event.target.value)
+                setStartTime("")
+              }}
+            />
+          </div>
+          <SlotPicker
+            slots={slotState.slots}
+            loading={slotState.loading}
+            error={slotState.error}
+            ready={Boolean(date)}
+            value={startTime}
+            onChange={setStartTime}
+          />
+        </>
+      ) : (
+        <p className="text-sm text-slate-500">Only scheduled or confirmed appointments can be rescheduled.</p>
+      )}
+      <div className="grid gap-3 md:grid-cols-2">
+        <Input className="rounded-2xl" value={location} onChange={(event) => setLocation(event.target.value)} aria-label="Location" />
+        <Textarea className="rounded-2xl" value={notes} onChange={(event) => setNotes(event.target.value)} aria-label="Notes" />
+      </div>
+      <FormError error={submit.error} />
+      <Button
+        disabled={submit.pending}
+        onClick={() =>
+          submit.run(() => onSave({ startTime: startTime ? new Date(startTime) : undefined, notes, location }))
+        }
+      >
+        {submit.pending ? "Saving..." : startTime ? "Reschedule & save" : "Save details"}
+      </Button>
+    </div>
   )
 }
