@@ -2,11 +2,13 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import type { ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { CalendarClock, ChartColumn, Clock3, Home, Sparkles, Users, UserSquare2, Wrench } from "lucide-react"
 import { Badge } from "./ui/badge"
 import { Button } from "./ui/button"
 import { cn } from "../lib/utils"
+import { getDisplayTimeZone } from "../lib/booking-helpers"
+import type { SessionInfo } from "../hooks/use-booking-platform"
 
 const navigation = [
   { href: "/", label: "Overview", icon: Home },
@@ -23,11 +25,26 @@ interface AppShellProps {
   subtitle: string
   eyebrow?: string
   actions?: ReactNode
+  session?: SessionInfo | null
+  onLogout?: () => void
   children: ReactNode
 }
 
-export function AppShell({ title, subtitle, eyebrow, actions, children }: AppShellProps) {
+export function AppShell({ title, subtitle, eyebrow, actions, session, onLogout, children }: AppShellProps) {
   const pathname = usePathname()
+  // Rendered after mount so the server and client markup agree.
+  const [today, setToday] = useState("")
+  useEffect(() => {
+    setToday(
+      new Date().toLocaleDateString("en-US", {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+        timeZone: session?.business.timeZone ?? getDisplayTimeZone(),
+      }),
+    )
+  }, [session])
   const activeLabel = navigation.find((item) => item.href === pathname)?.label ?? "Workspace"
 
   return (
@@ -53,10 +70,27 @@ export function AppShell({ title, subtitle, eyebrow, actions, children }: AppShe
 
             <div className="flex flex-wrap items-center gap-3">
               <Badge variant="secondary">Live workspace</Badge>
-              <Badge className="bg-[#233731] text-[#f6f1e9]">Saturday, July 25, 2026</Badge>
+              {today ? <Badge className="bg-[#233731] text-[#f6f1e9]">{today}</Badge> : null}
+              {session ? (
+                <Button asChild variant="outline">
+                  <Link href={`/book/${session.business.slug}`} target="_blank">
+                    Public booking page
+                  </Link>
+                </Button>
+              ) : null}
               <Button asChild>
                 <Link href="/appointments">Open Bookings</Link>
               </Button>
+              {session ? (
+                <div className="flex items-center gap-3 text-sm text-slate-600">
+                  <span>
+                    {session.user.name} · {session.user.role === "ADMIN" ? "Admin" : "Provider"}
+                  </span>
+                  <Button variant="ghost" size="sm" onClick={onLogout}>
+                    Sign out
+                  </Button>
+                </div>
+              ) : null}
             </div>
           </div>
 

@@ -1,8 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { addMinutes } from "../lib/utils/date-utils"
-import { mockAppointments, mockAvailability, mockClients, mockProviders, mockServices } from "../lib/mock-data"
+import { useCallback, useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
+import { api, ApiClientError, reviveDates } from "../lib/api-client"
+import { setDisplayTimeZone } from "../lib/booking-helpers"
 import type {
   Appointment,
   AppointmentStatus,
@@ -18,215 +19,159 @@ import type {
   Service,
 } from "../lib/types"
 
-const STORAGE_KEY = "appointiq-platform-state-v2"
+export interface SessionInfo {
+  user: { id: string; name: string; email: string; role: "ADMIN" | "PROVIDER"; providerId: string | null }
+  business: { id: string; name: string; slug: string; timeZone: string }
+}
 
-const initialState = (): BookingPlatformState => ({
-  services: mockServices,
-  providers: mockProviders,
-  clients: mockClients,
-  appointments: mockAppointments,
-  availability: mockAvailability,
-})
+const empty: BookingPlatformState = { services: [], providers: [], clients: [], appointments: [], availability: [] }
 
-const toDate = (value: string | Date) => (value instanceof Date ? value : new Date(value))
+const D = ["createdAt", "updatedAt"]
+const reviveService = (s: Service) => reviveDates(s, D)
+const reviveProvider = (p: Provider) => reviveDates(p, D)
+const reviveClient = (c: Client) => reviveDates(c, D)
+const reviveAppointment = (a: Appointment) => reviveDates(a, [...D, "startTime", "endTime", "blockedUntil"])
 
-const reviveState = (rawState: BookingPlatformState): BookingPlatformState => ({
-  services: rawState.services.map((service) => ({
-    ...service,
-    createdAt: toDate(service.createdAt),
-    updatedAt: toDate(service.updatedAt),
-  })),
-  providers: rawState.providers.map((provider) => ({
-    ...provider,
-    createdAt: toDate(provider.createdAt),
-    updatedAt: toDate(provider.updatedAt),
-  })),
-  clients: rawState.clients.map((client) => ({
-    ...client,
-    createdAt: toDate(client.createdAt),
-    updatedAt: toDate(client.updatedAt),
-  })),
-  appointments: rawState.appointments.map((appointment) => ({
-    ...appointment,
-    startTime: toDate(appointment.startTime),
-    endTime: toDate(appointment.endTime),
-    createdAt: toDate(appointment.createdAt),
-    updatedAt: toDate(appointment.updatedAt),
-  })),
-  availability: rawState.availability,
-})
+type Resource = keyof BookingPlatformState
 
-const createId = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
-
+/**
+ * Server-backed replacement for the old localStorage hook. The returned data keeps the
+ * same shape the pages already use; mutations are async, throw ApiClientError on failure
+ * (so forms can show the server's validation messages) and refetch what they touched.
+ */
 export function useBookingPlatform() {
-  const [state, setState] = useState<BookingPlatformState>(initialState)
-  const [isHydrated, setIsHydrated] = useState(false)
+  const router = useRouter()
+  const [state, setState] = useState<BookingPlatformState>(empty)
+  const [session, setSession] = useState<SessionInfo | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    const saved = window.localStorage.getItem(STORAGE_KEY)
-
-    if (saved) {
-      try {
-        setState(reviveState(JSON.parse(saved) as BookingPlatformState))
-      } catch {
-        setState(initialState())
+  const handleError = useCallback(
+    (e: unknown) => {
+      if (e instanceof ApiClientError && e.status === 401) {
+        router.replace("/login")
+        return
       }
-    }
+      setError(e instanceof Error ? e.message : "Failed to load data.")
+    },
+    [router],
+  )
 
-    setIsHydrated(true)
+  const fetchResource = useCallback(async (resource: Resource): Promise<Partial<BookingPlatformState>> => {
+    switch (resource) {
+      case "services":
+        return { services: (await api<{ services: Service[] }>("/api/services")).services.map(reviveService) }
+      case "providers":
+        return { providers: (await api<{ providers: Provider[] }>("/api/providers")).providers.map(reviveProvider) }
+      case "clients":
+        return { clients: (await api<{ clients: Client[] }>("/api/clients")).clients.map(reviveClient) }
+      case "appointments":
+        return {
+          appointments: (await api<{ appointments: Appointment[] }>("/api/appointments?limit=1000")).appointments.map(
+            reviveAppointment,
+          ),
+        }
+      case "availability":
+        return { availability: (await api<{ availability: Availability[] }>("/api/availability")).availability }
+    }
   }, [])
 
+  const refresh = useCallback(
+    async (...resources: Resource[]) => {
+      const parts = await Promise.all(resources.map(fetchResource))
+      setState((current) => Object.assign({}, current, ...parts))
+    },
+    [fetchResource],
+  )
+
+  const reload = useCallback(async () => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      const me = await api<SessionInfo>("/api/auth/me")
+      setSession(me)
+      setDisplayTimeZone(me.business.timeZone)
+      await refresh("services", "providers", "clients", "appointments", "availability")
+    } catch (e) {
+      handleError(e)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [refresh, handleError])
+
   useEffect(() => {
-    if (!isHydrated) return
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-  }, [isHydrated, state])
+    void reload()
+  }, [reload])
 
-  const getService = (serviceId: string) => state.services.find((service) => service.id === serviceId)
-  const getProvider = (providerId: string) => state.providers.find((provider) => provider.id === providerId)
-  const getClient = (clientId: string) => state.clients.find((client) => client.id === clientId)
+  const getService = (id: string) => state.services.find((s) => s.id === id)
+  const getProvider = (id: string) => state.providers.find((p) => p.id === id)
+  const getClient = (id: string) => state.clients.find((c) => c.id === id)
 
-  const createService = (data: CreateServiceData) => {
-    const next: Service = {
-      id: createId("srv"),
-      name: data.name,
-      description: data.description,
-      duration: data.duration,
-      price: data.price,
-      category: data.category || "General",
-      color: data.color || "#2563eb",
-      bufferTime: data.bufferTime ?? 10,
-      capacity: data.capacity ?? 1,
-      isActive: true,
-      featured: data.featured ?? false,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    }
-
-    setState((current) => ({ ...current, services: [next, ...current.services] }))
+  const createService = async (data: CreateServiceData) => {
+    await api("/api/services", { method: "POST", body: data })
+    await refresh("services")
   }
-
-  const updateService = (serviceId: string, data: Partial<Service>) => {
-    setState((current) => ({
-      ...current,
-      services: current.services.map((service) =>
-        service.id === serviceId ? { ...service, ...data, updatedAt: new Date() } : service,
-      ),
-    }))
+  const updateService = async (id: string, data: Partial<Service>) => {
+    await api(`/api/services/${id}`, { method: "PATCH", body: data })
+    await refresh("services")
   }
-
-  const createProvider = (data: CreateProviderData) => {
-    const next: Provider = {
-      id: createId("pro"),
-      name: data.name,
-      role: data.role || "Provider",
-      email: data.email,
-      phone: data.phone || "",
-      bio: data.bio || "",
-      specialties: data.specialties,
-      rating: data.rating ?? 4.7,
-      utilizationTarget: data.utilizationTarget ?? 75,
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    }
-
-    setState((current) => ({ ...current, providers: [next, ...current.providers] }))
+  const createProvider = async (data: CreateProviderData) => {
+    await api("/api/providers", { method: "POST", body: data })
+    await refresh("providers")
   }
-
-  const updateProvider = (providerId: string, data: Partial<Provider>) => {
-    setState((current) => ({
-      ...current,
-      providers: current.providers.map((provider) =>
-        provider.id === providerId ? { ...provider, ...data, updatedAt: new Date() } : provider,
-      ),
-    }))
+  const updateProvider = async (id: string, data: Partial<Provider>) => {
+    await api(`/api/providers/${id}`, { method: "PATCH", body: data })
+    await refresh("providers")
   }
-
-  const createClient = (data: CreateClientData) => {
-    const next: Client = {
-      id: createId("cli"),
-      name: data.name,
-      email: data.email,
-      phone: data.phone || "",
-      notes: data.notes || "",
-      segment: data.segment || "new",
-      preferredContact: data.preferredContact || "email",
-      tags: data.tags || [],
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    }
-
-    setState((current) => ({ ...current, clients: [next, ...current.clients] }))
+  const createClient = async (data: CreateClientData) => {
+    await api("/api/clients", { method: "POST", body: data })
+    await refresh("clients")
   }
-
-  const updateClient = (clientId: string, data: Partial<Client>) => {
-    setState((current) => ({
-      ...current,
-      clients: current.clients.map((client) =>
-        client.id === clientId ? { ...client, ...data, updatedAt: new Date() } : client,
-      ),
-    }))
+  const updateClient = async (id: string, data: Partial<Client>) => {
+    await api(`/api/clients/${id}`, { method: "PATCH", body: data })
+    await refresh("clients")
   }
-
-  const createAppointment = (data: CreateAppointmentData) => {
-    const service = getService(data.serviceId)
-    if (!service) {
-      return
-    }
-
-    const next: Appointment = {
-      id: createId("apt"),
-      clientId: data.clientId,
-      providerId: data.providerId,
-      serviceId: data.serviceId,
-      startTime: data.startTime,
-      endTime: addMinutes(data.startTime, service.duration + service.bufferTime),
-      status: data.status || "scheduled",
-      paymentStatus: data.paymentStatus || "pending",
-      channel: data.channel || "website",
-      notes: data.notes || "",
-      price: service.price,
-      location: data.location || "Main Studio",
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    }
-
-    setState((current) => ({ ...current, appointments: [next, ...current.appointments] }))
+  const createAppointment = async (data: CreateAppointmentData) => {
+    await api("/api/appointments", { method: "POST", body: { ...data, startTime: data.startTime.toISOString() } })
+    await refresh("appointments", "clients")
   }
-
-  const updateAppointment = (appointmentId: string, data: Partial<Appointment>) => {
-    setState((current) => ({
-      ...current,
-      appointments: current.appointments.map((appointment) =>
-        appointment.id === appointmentId ? { ...appointment, ...data, updatedAt: new Date() } : appointment,
-      ),
-    }))
+  /** Reschedule, reassign or edit details. Pass startTime as a Date to reschedule. */
+  const updateAppointment = async (
+    id: string,
+    data: Partial<Pick<Appointment, "providerId" | "serviceId" | "status" | "paymentStatus" | "channel" | "notes" | "location">> & {
+      startTime?: Date
+    },
+  ) => {
+    await api(`/api/appointments/${id}`, {
+      method: "PATCH",
+      body: { ...data, startTime: data.startTime?.toISOString() },
+    })
+    await refresh("appointments")
   }
-
-  const updateAppointmentStatus = (appointmentId: string, status: AppointmentStatus) => {
-    updateAppointment(appointmentId, { status })
+  const updateAppointmentStatus = (id: string, status: AppointmentStatus) => updateAppointment(id, { status })
+  const createAvailability = async (data: CreateAvailabilityData) => {
+    await api("/api/availability", { method: "POST", body: data })
+    await refresh("availability")
   }
-
-  const createAvailability = (data: CreateAvailabilityData) => {
-    const next: Availability = {
-      id: createId("av"),
-      providerId: data.providerId,
-      dayOfWeek: data.dayOfWeek,
-      startTime: data.startTime,
-      endTime: data.endTime,
-      isActive: data.isActive,
-    }
-
-    setState((current) => ({ ...current, availability: [next, ...current.availability] }))
+  const deleteAvailability = async (id: string) => {
+    await api(`/api/availability/${id}`, { method: "DELETE" })
+    await refresh("availability")
   }
-
-  const resetDemo = () => {
-    setState(initialState())
+  const logout = async () => {
+    await api("/api/auth/logout", { method: "POST" })
+    router.replace("/login")
   }
 
   return {
     ...state,
-    isHydrated,
+    session,
+    timeZone: session?.business.timeZone ?? null,
+    isLoading,
+    error,
+    reload,
+    getService,
+    getProvider,
+    getClient,
     createService,
     updateService,
     createProvider,
@@ -237,6 +182,7 @@ export function useBookingPlatform() {
     updateAppointment,
     updateAppointmentStatus,
     createAvailability,
-    resetDemo,
+    deleteAvailability,
+    logout,
   }
 }
