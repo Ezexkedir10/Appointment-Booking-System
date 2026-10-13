@@ -8,11 +8,16 @@ import { Button } from "../../components/ui/button"
 import { Card, CardContent } from "../../components/ui/card"
 import { Input } from "../../components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select"
+import { DataGate, EmptyState } from "../../components/data-gate"
+import { FormError } from "../../components/form-error"
+import { useSubmit } from "../../hooks/use-submit"
 import { useBookingPlatform } from "../../hooks/use-booking-platform"
 import { dayNames, getWeeklyUtilization } from "../../lib/booking-helpers"
 
 export default function AvailabilityPage() {
-  const { appointments, availability, createAvailability, providers } = useBookingPlatform()
+  const platform = useBookingPlatform()
+  const { appointments, availability, createAvailability, providers } = platform
+  const submit = useSubmit()
   const [form, setForm] = useState({
     providerId: providers[0]?.id || "",
     dayOfWeek: "1",
@@ -22,6 +27,8 @@ export default function AvailabilityPage() {
 
   return (
     <AppShell
+      session={platform.session}
+      onLogout={platform.logout}
       eyebrow="Capacity Planning"
       title="Visualize operating hours and provider capacity"
       subtitle="Availability now supports a more operational scheduling story by connecting provider windows to utilization, booking density, and weekly footprint planning."
@@ -29,6 +36,7 @@ export default function AvailabilityPage() {
         <Badge className="rounded-full bg-sky-100 px-4 py-2 text-sky-800">{availability.length} active schedule windows</Badge>
       }
     >
+      <DataGate platform={platform}>
       <div className="grid gap-6 xl:grid-cols-[0.82fr_1.18fr]">
         <Card className="rounded-[28px] border-slate-200/80">
           <CardContent className="p-7">
@@ -101,20 +109,23 @@ export default function AvailabilityPage() {
               </div>
             </div>
 
+            <FormError error={submit.error} />
             <Button
               className="mt-5"
-              onClick={() => {
-                if (!form.providerId) return
-                createAvailability({
+              disabled={submit.pending}
+              onClick={() =>
+                submit.run(async () => {
+                await createAvailability({
                   providerId: form.providerId,
                   dayOfWeek: Number(form.dayOfWeek),
                   startTime: form.startTime,
                   endTime: form.endTime,
                   isActive: true,
                 })
-              }}
+                })
+              }
             >
-              Save window
+              {submit.pending ? "Saving..." : "Save window"}
             </Button>
           </CardContent>
         </Card>
@@ -174,6 +185,11 @@ export default function AvailabilityPage() {
           </Card>
 
           <div className="grid gap-5 md:grid-cols-2">
+            {!providers.length ? (
+              <div className="md:col-span-2">
+                <EmptyState message="No providers yet. Add a provider on the Team page before setting availability." />
+              </div>
+            ) : null}
             {providers.map((provider) => {
               const utilization = getWeeklyUtilization(provider, availability, appointments)
               return (
@@ -208,6 +224,7 @@ export default function AvailabilityPage() {
           </div>
         </div>
       </div>
+      </DataGate>
     </AppShell>
   )
 }

@@ -1,189 +1,63 @@
 "use client"
 
 import { useState } from "react"
-import { Star, UserPlus } from "lucide-react"
-import { AppShell } from "../../components/app-shell"
-import { Badge } from "../../components/ui/badge"
+import { useRouter } from "next/navigation"
+import { Sparkles } from "lucide-react"
+import { FormError } from "../../components/form-error"
 import { Button } from "../../components/ui/button"
 import { Card, CardContent } from "../../components/ui/card"
 import { Input } from "../../components/ui/input"
-import { Textarea } from "../../components/ui/textarea"
-import { useBookingPlatform } from "../../hooks/use-booking-platform"
-import { formatCurrency, getProviderStats, getWeeklyUtilization } from "../../lib/booking-helpers"
+import { useSubmit } from "../../hooks/use-submit"
+import { api } from "../../lib/api-client"
 
-export default function ProvidersPage() {
-  const { appointments, availability, createProvider, providers, services } = useBookingPlatform()
-  const [form, setForm] = useState({
-    name: "",
-    role: "",
-    email: "",
-    phone: "",
-    bio: "",
-    specialties: "",
-  })
+export default function LoginPage() {
+  const router = useRouter()
+  const submit = useSubmit()
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+
+  const signIn = () =>
+    submit.run(async () => {
+      await api("/api/auth/login", { method: "POST", body: { email, password } })
+      router.replace("/")
+    })
 
   return (
-    <AppShell
-      eyebrow="Team Operations"
-      title="Manage providers, specialties, and workload"
-      subtitle="The provider area now shows a more realistic operations view: role definition, quality score, utilization, earned revenue, and skill alignment with the service catalog."
-      actions={
-        <Badge className="rounded-full bg-amber-100 px-4 py-2 text-amber-800">
-          Avg rating {(providers.reduce((sum, provider) => sum + provider.rating, 0) / providers.length).toFixed(1)}
-        </Badge>
-      }
-    >
-      <div className="grid gap-6 xl:grid-cols-[0.86fr_1.14fr]">
-        <Card className="rounded-[28px] border-slate-200/80">
-          <CardContent className="p-7">
-            <div className="flex items-center gap-3">
-              <div className="rounded-2xl bg-amber-100 p-3 text-amber-700">
-                <UserPlus className="h-5 w-5" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.25em] text-slate-500">Add provider</p>
-                <h3 className="mt-1 text-2xl font-semibold text-slate-950">Expand the team roster</h3>
-              </div>
+    <main className="flex min-h-screen items-center justify-center px-4">
+      <Card className="w-full max-w-md rounded-[28px] border-slate-200/80">
+        <CardContent className="p-8">
+          <div className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-[18px] ink-panel">
+              <Sparkles className="h-5 w-5 text-amber-200" />
             </div>
-
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
-              <div className="space-y-2 md:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Full name</label>
-                <Input
-                  className="rounded-2xl"
-                  value={form.name}
-                  onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700">Role</label>
-                <Input
-                  className="rounded-2xl"
-                  value={form.role}
-                  onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700">Phone</label>
-                <Input
-                  className="rounded-2xl"
-                  value={form.phone}
-                  onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))}
-                />
-              </div>
-              <div className="space-y-2 md:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Email</label>
-                <Input
-                  className="rounded-2xl"
-                  type="email"
-                  value={form.email}
-                  onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
-                />
-              </div>
-              <div className="space-y-2 md:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Specialties</label>
-                <Input
-                  className="rounded-2xl"
-                  placeholder="Executive Consultation, Signature Care Package"
-                  value={form.specialties}
-                  onChange={(event) => setForm((current) => ({ ...current, specialties: event.target.value }))}
-                />
-              </div>
-              <div className="space-y-2 md:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Bio</label>
-                <Textarea
-                  className="min-h-28 rounded-2xl"
-                  value={form.bio}
-                  onChange={(event) => setForm((current) => ({ ...current, bio: event.target.value }))}
-                />
-              </div>
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.25em] text-slate-500">AppointIQ Studio</p>
+              <h1 className="text-2xl font-semibold text-slate-950">Sign in</h1>
             </div>
+          </div>
 
-            <Button
-              className="mt-5"
-              onClick={() => {
-                if (!form.name || !form.email) return
-                const specialties = form.specialties
-                  .split(",")
-                  .map((item) => item.trim())
-                  .filter(Boolean)
-                  .map((name) => services.find((service) => service.name.toLowerCase() === name.toLowerCase())?.id)
-                  .filter(Boolean) as string[]
-
-                createProvider({
-                  name: form.name,
-                  role: form.role || "Provider",
-                  email: form.email,
-                  phone: form.phone,
-                  bio: form.bio,
-                  specialties,
-                })
-
-                setForm({ name: "", role: "", email: "", phone: "", bio: "", specialties: "" })
-              }}
-            >
-              Save provider
+          <form
+            className="mt-6 space-y-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void signIn()
+            }}
+          >
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700" htmlFor="email">Email</label>
+              <Input id="email" type="email" autoComplete="username" required className="rounded-2xl" value={email} onChange={(e) => setEmail(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700" htmlFor="password">Password</label>
+              <Input id="password" type="password" autoComplete="current-password" required className="rounded-2xl" value={password} onChange={(e) => setPassword(e.target.value)} />
+            </div>
+            <FormError error={submit.error} />
+            <Button type="submit" className="w-full" disabled={submit.pending}>
+              {submit.pending ? "Signing in..." : "Sign in"}
             </Button>
-          </CardContent>
-        </Card>
-
-        <div className="grid gap-5 md:grid-cols-2">
-          {providers.map((provider) => {
-            const stats = getProviderStats(provider, appointments)
-            const utilization = getWeeklyUtilization(provider, availability, appointments)
-
-            return (
-              <Card key={provider.id} className="rounded-[28px] border-slate-200/80">
-                <CardContent className="p-6">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h3 className="text-xl font-semibold text-slate-950">{provider.name}</h3>
-                      <p className="mt-1 text-sm text-slate-600">{provider.role}</p>
-                      <p className="mt-2 text-sm text-slate-500">{provider.email}</p>
-                      <p className="text-sm text-slate-500">{provider.phone}</p>
-                    </div>
-                    <div className="rounded-2xl bg-amber-50 p-3 text-amber-700">
-                      <Star className="h-5 w-5" />
-                    </div>
-                  </div>
-
-                  <p className="mt-4 text-sm leading-7 text-slate-600">{provider.bio}</p>
-
-                  <div className="mt-5 grid grid-cols-2 gap-3">
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Utilization</p>
-                      <p className="mt-2 text-lg font-semibold text-slate-900">{utilization}%</p>
-                    </div>
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Revenue</p>
-                      <p className="mt-2 text-lg font-semibold text-slate-900">{formatCurrency(stats.revenue)}</p>
-                    </div>
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Rating</p>
-                      <p className="mt-2 text-lg font-semibold text-slate-900">{provider.rating.toFixed(1)}</p>
-                    </div>
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Bookings</p>
-                      <p className="mt-2 text-lg font-semibold text-slate-900">{stats.activeBookings}</p>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {provider.specialties.map((specialty) => {
-                      const service = services.find((item) => item.id === specialty)
-                      return (
-                        <Badge key={specialty} variant="secondary" className="rounded-full px-3 py-1">
-                          {service?.name || specialty}
-                        </Badge>
-                      )
-                    })}
-                  </div>
-                </CardContent>
-              </Card>
-            )
-          })}
-        </div>
-      </div>
-    </AppShell>
+          </form>
+        </CardContent>
+      </Card>
+    </main>
   )
 }

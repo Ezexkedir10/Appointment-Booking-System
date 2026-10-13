@@ -6,16 +6,20 @@ import { AppShell } from "../components/app-shell"
 import { Badge } from "../components/ui/badge"
 import { Button } from "../components/ui/button"
 import { Card, CardContent } from "../components/ui/card"
+import { DataGate } from "../components/data-gate"
 import { useBookingPlatform } from "../hooks/use-booking-platform"
 import { formatCompactDate, formatCurrency, getRevenue, getUpcomingAppointments } from "../lib/booking-helpers"
 
 export default function HomePage() {
-  const { appointments, clients, providers, services, isHydrated } = useBookingPlatform()
+  const platform = useBookingPlatform()
+  const { appointments, clients, providers, services } = platform
   const upcoming = getUpcomingAppointments(appointments).slice(0, 4)
   const revenue = getRevenue(appointments)
 
   return (
     <AppShell
+      session={platform.session}
+      onLogout={platform.logout}
       eyebrow="Platform Overview"
       title="A completely redesigned appointment booking workspace with stronger product structure"
       subtitle="This version moves away from the earlier sidebar-heavy starter layout and into a clearer editorial workspace with better readability, calmer surfaces, stronger contrast, and more polished page consistency."
@@ -25,6 +29,7 @@ export default function HomePage() {
         </Button>
       }
     >
+      <DataGate platform={platform}>
       <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <section className="ink-panel rounded-[30px] border border-white/10 p-8 shadow-[0_28px_50px_rgba(35,55,49,0.2)]">
           <Badge className="bg-white/10 text-[#f6f1e9]">System Snapshot</Badge>
@@ -74,7 +79,7 @@ export default function HomePage() {
             <CardContent className="p-7">
               <p className="section-label text-[11px] font-semibold uppercase text-[#8a6b41]">Workspace status</p>
               <div className="mt-4 flex flex-wrap gap-3">
-                <Badge variant="secondary">{isHydrated ? "Local data active" : "Loading workspace"}</Badge>
+                <Badge variant="secondary">Live database</Badge>
                 <Badge variant="secondary">{services.length} services loaded</Badge>
               </div>
               <p className="mt-4 text-sm leading-7 text-slate-600">
@@ -191,6 +196,7 @@ export default function HomePage() {
           </CardContent>
         </Card>
       </div>
+      </DataGate>
     </AppShell>
   )
 }

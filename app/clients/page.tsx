@@ -9,11 +9,16 @@ import { Card, CardContent } from "../../components/ui/card"
 import { Input } from "../../components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select"
 import { Textarea } from "../../components/ui/textarea"
+import { DataGate, EmptyState } from "../../components/data-gate"
+import { FormError } from "../../components/form-error"
+import { useSubmit } from "../../hooks/use-submit"
 import { useBookingPlatform } from "../../hooks/use-booking-platform"
 import { formatCompactDate, formatCurrency, getClientStats } from "../../lib/booking-helpers"
 
 export default function ClientsPage() {
-  const { appointments, clients, createClient } = useBookingPlatform()
+  const platform = useBookingPlatform()
+  const { appointments, clients, createClient } = platform
+  const submit = useSubmit()
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -26,6 +31,8 @@ export default function ClientsPage() {
 
   return (
     <AppShell
+      session={platform.session}
+      onLogout={platform.logout}
       eyebrow="Client Relationships"
       title="Track clients like an actual growth-minded business"
       subtitle="Instead of only storing contact details, the client area now supports segments, contact preference, tags, visit history, and lifetime value so the appointment system reads like a real retention product."
@@ -35,6 +42,7 @@ export default function ClientsPage() {
         </Badge>
       }
     >
+      <DataGate platform={platform}>
       <div className="grid gap-6 xl:grid-cols-[0.86fr_1.14fr]">
         <Card className="rounded-[28px] border-slate-200/80">
           <CardContent className="p-7">
@@ -123,12 +131,14 @@ export default function ClientsPage() {
               </div>
             </div>
 
+            <FormError error={submit.error} />
             <Button
               className="mt-5"
-              onClick={() => {
-                if (!form.name || !form.email) return
+              disabled={submit.pending}
+              onClick={() =>
+                submit.run(async () => {
 
-                createClient({
+                await createClient({
                   name: form.name,
                   email: form.email,
                   phone: form.phone,
@@ -150,14 +160,20 @@ export default function ClientsPage() {
                   notes: "",
                   tags: "",
                 })
-              }}
+                })
+              }
             >
-              Save client
+              {submit.pending ? "Saving..." : "Save client"}
             </Button>
           </CardContent>
         </Card>
 
         <div className="grid gap-5 md:grid-cols-2">
+          {!clients.length ? (
+            <div className="md:col-span-2">
+              <EmptyState message="No clients yet. Add your first client above." />
+            </div>
+          ) : null}
           {clients.map((client) => {
             const stats = getClientStats(client, appointments)
 
@@ -213,6 +229,7 @@ export default function ClientsPage() {
           })}
         </div>
       </div>
+      </DataGate>
     </AppShell>
   )
 }

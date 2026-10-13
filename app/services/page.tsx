@@ -8,11 +8,16 @@ import { Button } from "../../components/ui/button"
 import { Card, CardContent } from "../../components/ui/card"
 import { Input } from "../../components/ui/input"
 import { Textarea } from "../../components/ui/textarea"
+import { DataGate, EmptyState } from "../../components/data-gate"
+import { FormError } from "../../components/form-error"
+import { useSubmit } from "../../hooks/use-submit"
 import { useBookingPlatform } from "../../hooks/use-booking-platform"
 import { formatCurrency, getServiceBookingCount } from "../../lib/booking-helpers"
 
 export default function ServicesPage() {
-  const { appointments, createService, services } = useBookingPlatform()
+  const platform = useBookingPlatform()
+  const { appointments, createService, services } = platform
+  const submit = useSubmit()
   const [form, setForm] = useState({
     name: "",
     category: "",
@@ -26,10 +31,13 @@ export default function ServicesPage() {
 
   return (
     <AppShell
+      session={platform.session}
+      onLogout={platform.logout}
       eyebrow="Service Design"
       title="Build a service catalog that feels premium and operationally smart"
       subtitle="Each service now carries richer metadata such as categories, buffer time, featured placement, color identity, and capacity planning so the project looks more like a real booking product."
     >
+      <DataGate platform={platform}>
       <div className="grid gap-6 xl:grid-cols-[0.88fr_1.12fr]">
         <Card className="rounded-[28px] border-slate-200/80">
           <CardContent className="p-7">
@@ -115,12 +123,14 @@ export default function ServicesPage() {
               </div>
             </div>
 
+            <FormError error={submit.error} />
             <Button
               className="mt-5"
-              onClick={() => {
-                if (!form.name || !form.description) return
+              disabled={submit.pending}
+              onClick={() =>
+                submit.run(async () => {
 
-                createService({
+                await createService({
                   name: form.name,
                   description: form.description,
                   category: form.category || "General",
@@ -142,14 +152,20 @@ export default function ServicesPage() {
                   capacity: "1",
                   color: "#0f766e",
                 })
-              }}
+                })
+              }
             >
-              Add service
+              {submit.pending ? "Saving..." : "Add service"}
             </Button>
           </CardContent>
         </Card>
 
         <div className="grid gap-5 md:grid-cols-2">
+          {!services.length ? (
+            <div className="md:col-span-2">
+              <EmptyState message="No services yet. Add your first service above." />
+            </div>
+          ) : null}
           {services.map((service) => {
             const bookingCount = getServiceBookingCount(service, appointments)
 
@@ -206,6 +222,7 @@ export default function ServicesPage() {
           })}
         </div>
       </div>
+      </DataGate>
     </AppShell>
   )
 }
