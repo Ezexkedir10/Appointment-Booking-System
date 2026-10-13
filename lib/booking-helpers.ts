@@ -1,4 +1,12 @@
+import { zonedDateKey } from "./booking-engine"
 import type { Appointment, AppointmentStatus, Availability, Client, Provider, Service } from "./types"
+
+/** Business time zone used to render every timestamp; set once the session loads. */
+let displayTimeZone: string | undefined
+export function setDisplayTimeZone(timeZone: string) {
+  displayTimeZone = timeZone
+}
+export const getDisplayTimeZone = () => displayTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
 
 export const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
@@ -14,6 +22,7 @@ export function formatCompactDate(value: Date) {
   return value.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
+    timeZone: displayTimeZone,
   })
 }
 
@@ -23,6 +32,7 @@ export function formatDateTime(value: Date) {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: displayTimeZone,
   })
 }
 
@@ -30,6 +40,7 @@ export function formatTime(value: Date) {
   return value.toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
+    timeZone: displayTimeZone,
   })
 }
 
@@ -89,13 +100,9 @@ export function getRevenue(appointments: Appointment[]) {
 }
 
 export function getTodayAppointments(appointments: Appointment[]) {
-  const today = new Date()
-  return appointments.filter(
-    (appointment) =>
-      appointment.startTime.getFullYear() === today.getFullYear() &&
-      appointment.startTime.getMonth() === today.getMonth() &&
-      appointment.startTime.getDate() === today.getDate(),
-  )
+  const tz = getDisplayTimeZone()
+  const today = zonedDateKey(new Date(), tz)
+  return appointments.filter((appointment) => zonedDateKey(appointment.startTime, tz) === today)
 }
 
 export function getUpcomingAppointments(appointments: Appointment[]) {

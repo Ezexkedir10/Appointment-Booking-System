@@ -55,6 +55,8 @@ export interface Appointment {
   serviceId: string
   startTime: Date
   endTime: Date
+  /** endTime plus the service buffer; the period the provider is unavailable for other bookings. */
+  blockedUntil?: Date
   status: AppointmentStatus
   paymentStatus: PaymentStatus
   channel: BookingChannel
