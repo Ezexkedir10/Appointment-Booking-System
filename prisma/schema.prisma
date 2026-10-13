@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  PROVIDER
+}
+
+enum AppointmentStatus {
+  scheduled
+  confirmed
+  completed
+  cancelled
+  no_show
+}
+
+enum PaymentStatus {
+  paid
+  pending
+  refunded
+}
+
+enum BookingChannel {
+  website
+  phone
+  walk_in
+  partner
+}
+
+enum ClientSegment {
+  vip
+  returning
+  new
+  at_risk
+}
+
+enum ContactPreference {
+  email
+  phone
+  sms
+}
+
+model Business {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  /// IANA zone, e.g. "America/New_York". Availability windows are wall-clock in this zone.
+  timeZone  String   @default("UTC")
+  createdAt DateTime @default(now())
+
+  users        User[]
+  services     Service[]
+  providers    Provider[]
+  clients      Client[]
+  availability Availability[]
+  appointments Appointment[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  businessId   String
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role
+  /// Set for PROVIDER users: the provider record they may act on.
+  providerId   String?  @unique
+  createdAt    DateTime @default(now())
+
+  business Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  provider Provider?  @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  sessions Session[]
+
+  @@index([businessId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  /// SHA-256 of the cookie token; the raw token is never stored.
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Service {
+  id          String   @id @default(cuid())
+  businessId  String
+  name        String
+  description String   @default("")
+  duration    Int
+  price       Decimal  @db.Decimal(10, 2)
+  category    String   @default("General")
+  color       String   @default("#2563eb")
+  bufferTime  Int      @default(10)
+  capacity    Int      @default(1)
+  isActive    Boolean  @default(true)
+  featured    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  business     Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  providers    ProviderService[]
+  appointments Appointment[]
+
+  @@index([businessId])
+}
+
+model Provider {
+  id                 String   @id @default(cuid())
+  businessId         String
+  name               String
+  role               String   @default("Provider")
+  email              String
+  phone              String   @default("")
+  bio                String   @default("")
+  rating             Float    @default(4.7)
+  utilizationTarget  Int      @default(75)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  business     Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  /// Services this provider can perform (the "specialties").
+  services     ProviderService[]
+  availability Availability[]
+  appointments Appointment[]
+  user         User?
+
+  @@index([businessId])
+}
+
+model ProviderService {
+  providerId String
+  serviceId  String
+
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  service  Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@id([providerId, serviceId])
+}
+
+model Client {
+  id               String            @id @default(cuid())
+  businessId       String
+  name             String
+  email            String
+  phone            String            @default("")
+  notes            String            @default("")
+  segment          ClientSegment     @default(new)
+  preferredContact ContactPreference @default(email)
+  tags             String[]
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@unique([businessId, email])
+  @@index([businessId])
+}
+
+model Availability {
+  id         String  @id @default(cuid())
+  businessId String
+  providerId String
+  /// 0 = Sunday ... 6 = Saturday, in the business time zone
+  dayOfWeek  Int
+  startTime  String // "HH:mm" business-local
+  endTime    String
+  isActive   Boolean @default(true)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([providerId, dayOfWeek])
+}
+
+model Appointment {
+  id            String            @id @default(cuid())
+  businessId    String
+  clientId      String
+  providerId    String
+  serviceId     String
+  /// All instants are stored in UTC.
+  startTime     DateTime
+  /// startTime + service duration
+  endTime       DateTime
+  /// endTime + service buffer; this is what blocks other bookings
+  blockedUntil  DateTime
+  status        AppointmentStatus @default(scheduled)
+  paymentStatus PaymentStatus     @default(pending)
+  channel       BookingChannel    @default(website)
+  notes         String            @default("")
+  /// Price captured at booking time so later service edits don't rewrite history
+  price         Decimal           @db.Decimal(10, 2)
+  location      String            @default("Main Studio")
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  client   Client   @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  service  Service  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  @@index([businessId, startTime])
+  @@index([providerId, startTime])
+  @@index([clientId])
+}
